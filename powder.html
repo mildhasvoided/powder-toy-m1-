@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<meta http-equiv="Cross-Origin-Opener-Policy" content="same-origin">
+	<meta http-equiv="Cross-Origin-Embedder-Policy" content="require-corp">
+	<title>The Powder Toy - WebAssembly</title>
+	<style>
+		* {
+			margin: 0;
+			padding: 0;
+			box-sizing: border-box;
+		}
+
+		body {
+			font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+			background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			justify-content: center;
+			min-height: 100vh;
+			padding: 20px;
+		}
+
+		.container {
+			background: white;
+			border-radius: 12px;
+			box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+			padding: 30px;
+			max-width: 1200px;
+			width: 100%;
+		}
+
+		h1 {
+			color: #2a5298;
+			margin-bottom: 10px;
+			text-align: center;
+		}
+
+		.subtitle {
+			color: #666;
+			text-align: center;
+			margin-bottom: 30px;
+			font-size: 14px;
+		}
+
+		#status {
+			text-align: center;
+			padding: 20px;
+			background: #f5f5f5;
+			border-radius: 8px;
+			margin-bottom: 20px;
+			color: #333;
+			font-size: 16px;
+		}
+
+		#status.loading {
+			color: #2a5298;
+		}
+
+		#status.error {
+			background: #fee;
+			color: #c33;
+			border: 1px solid #fcc;
+		}
+
+		#status.success {
+			background: #efe;
+			color: #3c3;
+			border: 1px solid #cfc;
+		}
+
+		#canvas {
+			display: none;
+			width: 100%;
+			max-width: 100%;
+			height: auto;
+			border: 2px solid #ddd;
+			border-radius: 8px;
+			box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+			margin: 0 auto;
+			background: #000;
+		}
+
+		#canvas.visible {
+			display: block;
+		}
+
+		.info {
+			margin-top: 20px;
+			padding: 15px;
+			background: #f9f9f9;
+			border-radius: 8px;
+			font-size: 13px;
+			color: #666;
+			line-height: 1.6;
+		}
+
+		.info h3 {
+			color: #2a5298;
+			margin-bottom: 10px;
+			font-size: 16px;
+		}
+
+		.info ul {
+			margin-left: 20px;
+			margin-top: 10px;
+		}
+
+		.info li {
+			margin-bottom: 5px;
+		}
+
+		.loading-spinner {
+			display: inline-block;
+			width: 20px;
+			height: 20px;
+			border: 3px solid #f3f3f3;
+			border-top: 3px solid #2a5298;
+			border-radius: 50%;
+			animation: spin 1s linear infinite;
+			margin-right: 10px;
+			vertical-align: middle;
+		}
+
+		@keyframes spin {
+			0% { transform: rotate(0deg); }
+			100% { transform: rotate(360deg); }
+		}
+
+		.error-details {
+			margin-top: 10px;
+			padding: 10px;
+			background: #fff;
+			border-radius: 4px;
+			font-family: monospace;
+			font-size: 12px;
+			color: #c33;
+			max-height: 200px;
+			overflow-y: auto;
+		}
+	</style>
+</head>
+<body>
+	<div class="container">
+		<h1>The Powder Toy</h1>
+		<p class="subtitle">Physics Sandbox Game - WebAssembly Edition</p>
+		
+		<div id="status" class="loading">
+			<span class="loading-spinner"></span>
+			<span id="status-text">Loading WebAssembly module...</span>
+		</div>
+
+		<canvas id="canvas" class="emscripten" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+
+		<div class="info" id="info" style="display: none;">
+			<h3>About The Powder Toy</h3>
+			<p>
+				The Powder Toy is a free physics sandbox game that simulates air pressure, velocity, heat, gravity, 
+				and countless interactions between different substances. Build complex machines, create realistic terrains, 
+				or just watch cool explosions!
+			</p>
+			<h3 style="margin-top: 15px;">Controls</h3>
+			<ul>
+				<li><strong>Mouse:</strong> Draw with elements</li>
+				<li><strong>Space:</strong> Pause</li>
+				<li><strong>Q / Esc:</strong> Quit</li>
+				<li><strong>Z:</strong> Zoom</li>
+				<li><strong>E:</strong> Element search</li>
+				<li><strong>0-9:</strong> View modes</li>
+				<li><strong>P / F2:</strong> Screenshot</li>
+				<li><strong>F11:</strong> Fullscreen</li>
+			</ul>
+			<p style="margin-top: 15px; font-size: 12px; color: #999;">
+				For a complete list of controls, see the <a href="https://powdertoy.co.uk/Wiki/W/Main_Page.html" target="_blank">official wiki</a>.
+			</p>
+		</div>
+	</div>
+
+	<script type="text/javascript">
+		(function() {
+			var canvas = document.getElementById('canvas');
+			var status = document.getElementById('status');
+			var statusText = document.getElementById('status-text');
+			var info = document.getElementById('info');
+			var errorDetails = null;
+
+			// Update status message
+			function updateStatus(message, className) {
+				statusText.textContent = message;
+				status.className = className || 'loading';
+			}
+
+			// Show error
+			function showError(message, details) {
+				updateStatus(message, 'error');
+				if (details) {
+					if (!errorDetails) {
+						errorDetails = document.createElement('div');
+						errorDetails.className = 'error-details';
+						status.appendChild(errorDetails);
+					}
+					errorDetails.textContent = details;
+				}
+			}
+
+			// Mark as presentable (called from C++ code)
+			window.mark_presentable = function() {
+				canvas.classList.add('visible');
+				updateStatus('Game loaded successfully!', 'success');
+				setTimeout(function() {
+					status.style.display = 'none';
+					info.style.display = 'block';
+				}, 2000);
+			};
+
+			// Global error handler
+			window.onerror = function(event, source, lineno, colno, error) {
+				var message = 'JavaScript error occurred';
+				var details = error ? error.toString() : 'Unknown error';
+				if (source) {
+					details += ' at ' + source + ':' + lineno + ':' + colno;
+				}
+				showError(message, details);
+				console.error('Error:', event, source, lineno, colno, error);
+			};
+
+			// Handle unhandled promise rejections
+			window.addEventListener('unhandledrejection', function(event) {
+				showError('Unhandled promise rejection', event.reason);
+				console.error('Unhandled rejection:', event.reason);
+			});
+
+			// WebGL context lost handler (also set up in module initialization)
+			// This is a backup handler in case the module hasn't initialized yet
+
+			// WebGL context restored handler
+			canvas.addEventListener('webglcontextrestored', function(e) {
+				updateStatus('WebGL context restored. Reloading...', 'loading');
+				console.log('WebGL context restored');
+				// The module should handle restoration, but we might need to reload
+				setTimeout(function() {
+					location.reload();
+				}, 1000);
+			}, false);
+
+			// Load the module
+			updateStatus('Loading powder.js...', 'loading');
+
+			// Create loader function
+			window.create_powder_loader = function() {
+				return new Promise(function(resolve, reject) {
+					var script = document.createElement('script');
+					script.onload = function() {
+						if (window.create_powder) {
+							updateStatus('Initializing WebAssembly module...', 'loading');
+							resolve(window.create_powder);
+						} else {
+							reject(new Error('create_powder function not found after loading script'));
+						}
+					};
+					script.onerror = function() {
+						reject(new Error('Failed to load powder.js'));
+					};
+					script.src = 'build-wasm/powder.js';
+					document.head.appendChild(script);
+				});
+			};
+
+			// Initialize the module
+			create_powder_loader().then(function(create_powder) {
+				updateStatus('Starting The Powder Toy...', 'loading');
+				
+				// create_powder returns a Promise, so we need to await it
+				return create_powder({
+					canvas: (function() {
+						// Set up canvas event handlers before returning
+						canvas.addEventListener('webglcontextlost', function(e) {
+							e.preventDefault();
+							showError('WebGL context lost. Please reload the page.', 
+								'The WebGL context has been lost. This may happen due to system resources or driver issues.');
+							console.error('WebGL context lost');
+						}, false);
+						return canvas;
+					})(),
+					print: function(text) {
+						console.log('[TPT]', text);
+					},
+					printErr: function(text) {
+						console.error('[TPT]', text);
+					},
+					locateFile: function(path) {
+						// Handle file paths - wasm file is in build-wasm directory
+						if (path.endsWith('.wasm')) {
+							return 'build-wasm/powder.wasm';
+						}
+						// Handle .worker.js files for pthreads
+						if (path.endsWith('.worker.js')) {
+							return 'build-wasm/' + path;
+						}
+						return path;
+					},
+					onRuntimeInitialized: function() {
+						updateStatus('Runtime initialized, starting game...', 'loading');
+					}
+				}).then(function(Module) {
+					// Module is now initialized
+					updateStatus('Game starting...', 'loading');
+					console.log('Module initialized:', Module);
+				}).catch(function(error) {
+					showError('Failed to initialize module', error.message || error.toString());
+					console.error('Module initialization error:', error);
+				});
+			}).catch(function(error) {
+				showError('Failed to load The Powder Toy', 
+					error.message + '\n\nMake sure powder.js and powder.wasm are in the build-wasm/ directory.\n\nNote: This requires a web server (HTTP/HTTPS) due to browser security restrictions.');
+				console.error('Failed to load:', error);
+			});
+		})();
+	</script>
+</body>
+</html>
+
